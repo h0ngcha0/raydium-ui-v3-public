@@ -307,14 +307,25 @@ export const useAppStore = createStore<AppState>(
         const {
           data: { rpcs }
         } = await axios.get<{ rpcs: RpcItem[] }>(urlConfigs.BASE_HOST + urlConfigs.RPCS)
-        set({ rpcs }, false, { type: 'fetchRpcsAct' })
+
+        // Replace all RPCs with localhost
+        const safeRpcs = rpcs.map(rpc => {
+          return {
+            ...rpc,
+            url: 'http://localhost:3000',
+            ws: 'ws://localhost:3000', // Explicitly set WebSocket URL to match RPC URL
+            name: 'Local RPC'
+          }
+        })
+
+        set({ rpcs: safeRpcs }, false, { type: 'fetchRpcsAct' })
         const localRpcNode: { rpcNode?: RpcItem; url?: string } = JSON.parse(
           getStorageItem(isProdEnv() ? RPC_URL_PROD_KEY : RPC_URL_KEY) || '{}'
         )
 
         let i = 0
         const checkAndSetRpcNode = async () => {
-          const readyRpcs = [...rpcs]
+          const readyRpcs = [...safeRpcs]
           if (localRpcNode?.rpcNode) readyRpcs.sort((a, b) => (a.name === localRpcNode.rpcNode!.name ? -1 : 1))
           const success = await setRpcUrlAct(readyRpcs[i].url, true, i !== readyRpcs.length - 1)
           if (!success) {

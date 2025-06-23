@@ -18,7 +18,11 @@ import {
   IChartApi,
   ISeriesApi,
   TickMarkType,
-  createChart
+  createChart,
+  CandlestickSeries,
+  HistogramSeries,
+  CandlestickData,
+  HistogramData
 } from 'lightweight-charts'
 import dayjs from 'dayjs'
 import { ResolutionToSeconds } from './type'
@@ -259,7 +263,7 @@ export default function TVChart({
     })
 
     // Add candlestick series
-    const candlestickSeries = (chart as any).addCandlestickSeries({
+    const candlestickSeries = chart.addSeries(CandlestickSeries, {
       upColor,
       downColor,
       borderVisible: false,
@@ -283,7 +287,7 @@ export default function TVChart({
     })
 
     // Add volume series
-    const volumeSeries = (chart as any).addHistogramSeries({
+    const volumeSeries = chart.addSeries(HistogramSeries, {
       color: volumeColor,
       priceFormat: {
         type: 'volume'
@@ -313,14 +317,14 @@ export default function TVChart({
     const loadData = async () => {
       const resolution = savedResolution || (birdeye ? '15' : '5')
       const now = Date.now()
-      const from = now - (24 * 60 * 60 * 1000) // 24 hours ago
-      const to = now
+      const from = Math.floor((now - (24 * 60 * 60 * 1000)) / 1000) // 24 hours ago, converted to seconds and floored
+      const to = Math.floor(now / 1000) // Current time, converted to seconds and floored
 
       try {
-        const bars = await fetchChartData(poolId, resolution, from / 1000, to / 1000, birdeye || false, mintInfo, mintBInfo)
+        const bars = await fetchChartData(poolId, resolution, from, to, birdeye || false, mintInfo, mintBInfo)
         if (bars.length > 0) {
-          candlestickSeries.setData(bars)
-          volumeSeries.setData(bars.map(bar => ({ time: bar.time, value: bar.volume || 0 })))
+          candlestickSeries.setData(bars as any)
+          volumeSeries.setData(bars.map(bar => ({ time: bar.time, value: bar.volume || 0 })) as any)
           lastBarRef.current = bars[bars.length - 1]
         }
       } catch (error) {

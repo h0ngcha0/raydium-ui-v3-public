@@ -25,7 +25,7 @@ import {
 import { useAppStore, defaultNetWork, defaultEndpoint } from '../store/useAppStore'
 import { registerMoonGateWallet } from '@moongate/moongate-adapter'
 import { TipLinkWalletAdapter } from '@tiplink/wallet-adapter'
-import { WalletConnectWalletAdapter } from '@walletconnect/solana-adapter'
+// import { WalletConnectWalletAdapter } from '@walletconnect/solana-adapter'
 
 import { type Adapter, type WalletError } from '@solana/wallet-adapter-base'
 import { sendWalletEvent } from '@/api/event'
@@ -66,28 +66,29 @@ const App: FC<PropsWithChildren<any>> = ({ children }) => {
     // buttonLogoUri: 'ADD OPTIONAL LOGO FOR WIDGET BUTTON HERE'
   })
 
-  const _walletConnect = useMemo(() => {
-    const connectWallet: WalletConnectWalletAdapter[] = []
-    try {
-      connectWallet.push(
-        new WalletConnectWalletAdapter({
-          network: network as WalletAdapterNetwork.Mainnet,
-          options: {
-            projectId: process.env.NEXT_PUBLIC_WALLET_CONNECT_PJ_ID,
-            metadata: {
-              name: 'Raydium',
-              description: 'Raydium',
-              url: 'https://raydium.io/',
-              icons: ['https://raydium.io/logo/logo-only-icon.svg']
-            }
-          }
-        })
-      )
-    } catch (e) {
-      // console.error('WalletConnect error', e)
-    }
-    return connectWallet
-  }, [network])
+  // WalletConnect integration disabled
+  // const _walletConnect = useMemo(() => {
+  //   const connectWallet: WalletConnectWalletAdapter[] = []
+  //   try {
+  //     connectWallet.push(
+  //       new WalletConnectWalletAdapter({
+  //         network: network as WalletAdapterNetwork.Mainnet,
+  //         options: {
+  //           projectId: process.env.NEXT_PUBLIC_WALLET_CONNECT_PJ_ID,
+  //           metadata: {
+  //             name: 'Raydium',
+  //             description: 'Raydium',
+  //             url: 'https://raydium.io/',
+  //             icons: ['https://raydium.io/logo/logo-only-icon.svg']
+  //           }
+  //         }
+  //       })
+  //     )
+  //   } catch (e) {
+  //     // console.error('WalletConnect error', e)
+  //   }
+  //   return connectWallet
+  // }, [network])
 
   const wallets = useMemo(
     () => [
@@ -96,7 +97,7 @@ const App: FC<PropsWithChildren<any>> = ({ children }) => {
       new SlopeWalletAdapter({ endpoint }),
       new TorusWalletAdapter(),
       new LedgerWalletAdapter(),
-      ..._walletConnect,
+      // ..._walletConnect, // WalletConnect disabled
       new GlowWalletAdapter(),
       new TrustWalletAdapter(),
       new MathWalletAdapter({ endpoint }),

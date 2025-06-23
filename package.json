@@ -127,7 +127,8 @@
     "eslint-plugin-react": "^7.31.7",
     "prettier": "^2.7.1",
     "shx": "^0.3.4",
-    "typescript": "^5.0.4"
+    "typescript": "^5.0.4",
+    "http-proxy": "^1.18.1"
   },
   "browser": {
     "fs": false,
