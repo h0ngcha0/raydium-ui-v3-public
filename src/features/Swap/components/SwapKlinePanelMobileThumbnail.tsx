@@ -7,7 +7,7 @@ import toPercentString from '@/utils/numberish/toPercentString'
 import { formatCurrency, formatToRawLocaleStr } from '@/utils/numberish/formatter'
 import { useTranslation } from 'react-i18next'
 import { useEffect, useRef } from 'react'
-import { ColorType, IChartApi, ISeriesApi, createChart } from 'lightweight-charts'
+import { ColorType, IChartApi, ISeriesApi, createChart, LineSeries } from 'lightweight-charts'
 
 import useFetchPoolKLine from '@/hooks/pool/useFetchPoolKLine'
 import ExpandLeftTopIcon from '@/icons/misc/ExpandLeftTopIcon'
@@ -66,11 +66,11 @@ export function SwapKlinePanelMobileThumbnail({
         visible: false
       }
     })
-    const lineSeries = chart.addLineSeries({
+    const lineSeriesInstance = chart.addSeries(LineSeries, {
       priceLineVisible: false
     })
     chartRef.current.chart = chart
-    chartRef.current.line = lineSeries
+    chartRef.current.line = lineSeriesInstance
     return () => {
       chart.remove()
       chartRef.current = {}

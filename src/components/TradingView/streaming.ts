@@ -1,21 +1,30 @@
-import { Bar } from '@/charting_library/charting_library'
 import { ResolutionToSeconds, SymbolInfo } from './type'
 import { Connection } from '@solana/web3.js'
 import { Curve, LaunchpadPool, LaunchpadPoolInfo } from '@raydium-io/raydium-sdk-v2'
 import ToPublicKey from '@/utils/publicKey'
 import { initPoolPriceDecimal } from './utils'
 
+// Lightweight charts compatible bar interface
+export interface LightweightBar {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume?: number
+}
+
 const channelToSubscription = new Map<
   string,
   {
     subscriberUID: string
     resolution: string
-    lastDailyBar: Bar
+    lastDailyBar: LightweightBar
     curveType: number
     mintBDecimals: number
     handlers: {
       id: string
-      callback: (data: Bar) => void
+      callback: (data: LightweightBar) => void
     }[]
   }
 >()
@@ -41,7 +50,7 @@ export function closeSocket(connection: Connection) {
   lastSocketSubscribe = undefined
 }
 
-let arrowListener: ((pre: Bar, next: Bar) => void) | undefined
+let arrowListener: ((pre: LightweightBar, next: LightweightBar) => void) | undefined
 export const setArrowListener = (func: any) => (arrowListener = func)
 
 const poolListener = new Map<string, ((data: LaunchpadPoolInfo) => void)[]>()
@@ -95,7 +104,7 @@ export async function startSocket({ connection, poolId }: { connection: Connecti
 
         const unit = 1000 * ResolutionToSeconds[subscriptionItem.resolution as keyof typeof ResolutionToSeconds]
         const newBarTime = Math.floor(tradeTime / unit) * unit
-        let bar: Bar
+        let bar: LightweightBar
         if (newBarTime > lastDailyBar.time || !lastDailyBar.time) {
           bar = {
             time: newBarTime,
@@ -139,10 +148,10 @@ export function subscribeOnStream({
   symbolInfo: SymbolInfo
   resolution: string
   subscriberUID: string
-  lastDailyBar: Bar
+  lastDailyBar: LightweightBar
   curveType?: number
   mintBDecimals?: number
-  onRealtimeCallback: (data: Bar) => void
+  onRealtimeCallback: (data: LightweightBar) => void
   onResetCacheNeededCallback: () => void
 }) {
   const handler = {

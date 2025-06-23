@@ -1,12 +1,23 @@
 import { useAppStore, useTokenStore } from '@/store'
 import { subscribeOnStream, unsubscribeFromStream } from './streaming'
 import axios from '@/api/axios'
-import { ResolutionString, Bar, Timezone, SeriesFormat } from '@/charting_library/charting_library'
 import { ResolutionToSeconds, SymbolInfo } from './type'
 import { encodeStr } from '@/utils/common'
 import { solToWSol, wSolToSolString } from '@/utils/token'
 import { MintInfo } from '@/features/Launchpad/type'
 import { ApiV3Token } from '@raydium-io/raydium-sdk-v2'
+
+// Lightweight charts compatible types
+export type ResolutionString = '1' | '5' | '15' | '60' | '240' | '1D' | '1W' | '1M'
+
+export interface LightweightBar {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume?: number
+}
 
 const lastBarsCache = new Map()
 // DatafeedConfiguration implementation
@@ -100,27 +111,49 @@ export default class DataFeed {
     )}${ext ? ` ${ext}` : ''}`
     const isMarketCap = ext === 'marketcap' && this._mintInfo
 
-    const symbolInfo = {
+    const symbolInfo: SymbolInfo = {
       poolId: `${mintAAdress}_${mintBAdress}`,
       mintA: mintAAdress,
       mintB: mintBAdress,
       ticker: tickerName,
       name: tickerName,
+      full_name: tickerName,
       description: `${tickerName} pool`,
       type: 'birdeye data',
       session: '24x7',
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone as Timezone,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       exchange: 'birdeye',
       minmov: 1,
+      minmove2: 0,
       pricescale: 10 ** (isMarketCap ? 2 : Math.max(mintA.decimals!, mintB.decimals!)),
+      fractional: false,
       has_intraday: true,
       has_no_volume: true,
       has_weekly_and_monthly: false,
+      has_empty_bars: false,
       supported_resolutions: DataFeed.configurationData.supported_resolutions,
       volume_precision: 4,
       listed_exchange: 'Raydium',
-      format: 'price' as SeriesFormat,
-      decimals: this._mintInfo ? (isMarketCap ? 2 : Math.max(mintA.decimals!, mintB.decimals!)) : Math.min(mintA.decimals!, mintB.decimals!)
+      currency_code: 'USD',
+      original_currency_code: 'USD',
+      unit_id: 'USD',
+      original_unit_id: 'USD',
+      unit_conversion_types: [],
+      has_dwm: false,
+      force_session_rebuild: false,
+      has_seconds: false,
+      seconds_multipliers: [],
+      has_daily: true,
+      intraday_multipliers: ['1', '5', '15', '60', '240', '1D'],
+      supported_resolution: DataFeed.configurationData.supported_resolutions,
+      has_seconds_multipliers: false,
+      has_intraday_multipliers: true,
+      has_daily_multipliers: false,
+      has_weekly_and_monthly_multipliers: false,
+      visible_plots_set: 'ohlc',
+      data_status: 'endofday',
+      decimals: this._mintInfo ? (isMarketCap ? 2 : Math.max(mintA.decimals!, mintB.decimals!)) : Math.min(mintA.decimals!, mintB.decimals!),
+      format: 'price'
     }
     console.log('[resolveSymbol]: Symbol resolved', symbolInfo)
     onSymbolResolvedCallback(symbolInfo)
@@ -130,7 +163,7 @@ export default class DataFeed {
     symbolInfo: SymbolInfo,
     resolution: string,
     periodParams: { from: number; to: number; firstDataRequest: boolean },
-    onHistoryCallback: (d: Bar[], params?: any) => any,
+    onHistoryCallback: (d: LightweightBar[], params?: any) => any,
     onErrorCallback: (error: any) => any
   ) {
     const { from, to, firstDataRequest } = periodParams
@@ -155,8 +188,8 @@ export default class DataFeed {
         return
       }
 
-      const bars: Bar[] = []
-      let currentBar: Bar | undefined
+      const bars: LightweightBar[] = []
+      let currentBar: LightweightBar | undefined
       data.items.forEach((bar: any) => {
         if (bar.unixTime >= from && bar.unixTime < to) {
           const barTime = Math.floor(bar.unixTime / timeUnit) * timeUnit
@@ -199,8 +232,6 @@ export default class DataFeed {
       onHistoryCallback(bars, {
         noData: false
       })
-
-      return
     } catch (error) {
       console.log('[getBars]: Get error', error)
       onErrorCallback(error)
@@ -225,6 +256,8 @@ export default class DataFeed {
       onRealtimeCallback,
       subscriberUID,
       onResetCacheNeededCallback,
+      curveType: 0,
+      mintBDecimals: 9,
       lastDailyBar: lastBarsCache.get(symbolInfo.poolId)
     })
   }

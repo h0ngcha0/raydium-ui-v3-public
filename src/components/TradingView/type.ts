@@ -1,6 +1,4 @@
-import { LibrarySymbolInfo } from '@/charting_library/charting_library'
-
-export interface SymbolInfo extends LibrarySymbolInfo {
+export interface SymbolInfo {
   poolId: string
   description: string
   type: string
@@ -15,6 +13,35 @@ export interface SymbolInfo extends LibrarySymbolInfo {
   mintA: string
   mintB: string
   decimals: number
+  // Additional properties for lightweight-charts compatibility
+  ticker: string
+  name: string
+  full_name: string
+  timezone: string
+  listed_exchange: string
+  currency_code: string
+  original_currency_code: string
+  unit_id: string
+  original_unit_id: string
+  unit_conversion_types: string[]
+  has_dwm: boolean
+  force_session_rebuild: boolean
+  has_seconds: boolean
+  seconds_multipliers: string[]
+  has_daily: boolean
+  intraday_multipliers: string[]
+  supported_resolution: string[]
+  has_seconds_multipliers: boolean
+  has_intraday_multipliers: boolean
+  has_daily_multipliers: boolean
+  has_weekly_and_monthly_multipliers: boolean
+  has_empty_bars: boolean
+  visible_plots_set: string
+  data_status: string
+  format: string
+  fractional: boolean
+  minmove2: number
+  supported_resolutions: string[]
 }
 
 export const ResolutionToSeconds = {

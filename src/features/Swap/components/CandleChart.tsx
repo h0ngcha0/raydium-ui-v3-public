@@ -3,7 +3,7 @@ import { colors } from '@/theme/cssVariables/colors'
 import { AbsoluteCenter, Box, GridItem, Spinner, Text, useColorMode } from '@chakra-ui/react'
 import { ApiV3Token } from '@raydium-io/raydium-sdk-v2'
 import dayjs from 'dayjs'
-import { ColorType, CrosshairMode, IChartApi, ISeriesApi, TickMarkType, createChart } from 'lightweight-charts'
+import { ColorType, CrosshairMode, IChartApi, ISeriesApi, TickMarkType, createChart, CandlestickSeries, HistogramSeries } from 'lightweight-charts'
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatCurrency } from '@/utils/numberish/formatter'
@@ -70,7 +70,7 @@ export default function CandleChart({ onPriceChange, baseMint, quoteMint, timeTy
       }
     })
 
-    const candlestickSeries = chart.addCandlestickSeries({
+    const candlestickSeriesInstance = chart.addSeries(CandlestickSeries, {
       upColor,
       downColor,
       borderVisible: false,
@@ -86,7 +86,7 @@ export default function CandleChart({ onPriceChange, baseMint, quoteMint, timeTy
       }
     })
 
-    candlestickSeries.priceScale().applyOptions({
+    candlestickSeriesInstance.priceScale().applyOptions({
       scaleMargins: {
         // positioning the price scale for the area series
         top: 0.1,
@@ -94,7 +94,7 @@ export default function CandleChart({ onPriceChange, baseMint, quoteMint, timeTy
       }
     })
 
-    const volumeSeries = chart.addHistogramSeries({
+    const volumeSeriesInstance = chart.addSeries(HistogramSeries, {
       color: volumeColor,
       priceFormat: {
         type: 'volume'
@@ -105,7 +105,7 @@ export default function CandleChart({ onPriceChange, baseMint, quoteMint, timeTy
       // // set the positioning of the volume series
     })
 
-    volumeSeries.priceScale().applyOptions({
+    volumeSeriesInstance.priceScale().applyOptions({
       scaleMargins: {
         top: 0.7,
         bottom: 0
@@ -128,8 +128,8 @@ export default function CandleChart({ onPriceChange, baseMint, quoteMint, timeTy
     }, 100)
 
     chartRef.current.chart = chart
-    chartRef.current.candle = candlestickSeries
-    chartRef.current.volume = volumeSeries
+    chartRef.current.candle = candlestickSeriesInstance
+    chartRef.current.volume = volumeSeriesInstance
     return () => {
       chart.remove()
       chartRef.current = {}

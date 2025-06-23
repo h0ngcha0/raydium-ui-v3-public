@@ -1,4 +1,5 @@
-import type { ThemeName } from '@/charting_library'
+// Lightweight charts compatible theme type
+export type ThemeName = 'light' | 'dark'
 
 export enum AppColorMode {
   GreenUp = 'GreenUp',

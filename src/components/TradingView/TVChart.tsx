@@ -1,33 +1,141 @@
-import {
-  LanguageCode,
-  ResolutionString,
-  EntityId,
-  TradingTerminalWidgetOptions,
-  widget as Widget,
-  ChartPropertiesOverrides,
-  Timezone,
-  Bar
-} from '@/charting_library'
-import { useEffect, useMemo, useState } from 'react'
-import { Themes, THEME_NAMES, AppTheme, AppColorMode } from './TvTheme'
+import { useEffect, useMemo, useState, useRef } from 'react'
+import { Themes, AppTheme, AppColorMode } from './TvTheme'
 import { Box, useColorMode } from '@chakra-ui/react'
 import { useTranslation } from 'react-i18next'
-import Datafeed from './datafeed'
-import DatafeedBirdeye from './datafeedBirdeye'
 import { closeSocket, setArrowListener } from './streaming'
 import { useTradingViewStore } from '@/store/useTradingViewStore'
 import { getSavedResolution } from './utils'
 import { useAppStore, useLaunchpadStore } from '@/store'
 import { formatCurrency } from '@/utils/numberish/formatter'
-import { SymbolInfo } from './type'
 import { isEmpty } from 'lodash'
 import axiosInstance from '@/api/axios'
 import { Subject } from 'rxjs'
 import { MintInfo } from '@/features/Launchpad/type'
 import { ApiV3Token } from '@raydium-io/raydium-sdk-v2'
+import {
+  ColorType,
+  CrosshairMode,
+  IChartApi,
+  ISeriesApi,
+  TickMarkType,
+  createChart
+} from 'lightweight-charts'
+import dayjs from 'dayjs'
+import { ResolutionToSeconds } from './type'
 
 export const refreshChartSubject = new Subject<string>()
-const isIFrame = (element: HTMLElement | null): element is HTMLIFrameElement => element !== null && element.tagName === 'IFRAME'
+
+// Data adapters for lightweight-charts
+interface LightweightBar {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume?: number
+}
+
+// Data fetching functions
+async function fetchChartData(
+  poolId: string,
+  resolution: string,
+  from: number,
+  to: number,
+  birdeye: boolean,
+  mintInfo?: MintInfo,
+  mintBInfo?: ApiV3Token
+): Promise<LightweightBar[]> {
+  const timeUnit = ResolutionToSeconds[resolution as keyof typeof ResolutionToSeconds]
+
+  if (birdeye) {
+    // Birdeye data fetching
+    const frame = timeUnit >= ResolutionToSeconds['1D'] ? resolution : timeUnit <= ResolutionToSeconds['15'] ? `${resolution}m` : '15m'
+    const isMarketCap = mintInfo && poolId.includes('marketcap')
+    const quoteAddress = isMarketCap ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : poolId.split('_')[1]
+
+    const { data } = await axiosInstance.get(
+      `https://birdeye-proxy.raydium.io/defi/ohlcv/base_quote?base_address=${poolId.split('_')[0]}&quote_address=${quoteAddress}&type=${frame}&time_from=${from}&time_to=${to}`
+    )
+
+    if (!data?.items?.length) return []
+
+    const bars: LightweightBar[] = []
+    let currentBar: LightweightBar | undefined
+
+    data.items.forEach((bar: any) => {
+      if (bar.unixTime >= from && bar.unixTime < to) {
+        const barTime = Math.floor(bar.unixTime / timeUnit) * timeUnit
+        if (currentBar && barTime * 1000 > currentBar.time) {
+          bars.push(currentBar)
+          currentBar = undefined
+        }
+
+        const multiplier = isMarketCap ? mintInfo!.supply : 1
+        if (!currentBar) {
+          currentBar = {
+            time: barTime * 1000,
+            low: bar.l * multiplier,
+            high: bar.h * multiplier,
+            open: bar.o * multiplier,
+            close: bar.c * multiplier,
+            volume: bar.vQuote
+          }
+          return
+        }
+        currentBar = {
+          ...currentBar,
+          volume: (currentBar.volume || 0) + (bar.vQuote || 0),
+          close: bar.c * multiplier,
+          low: Math.min(bar.l * multiplier, currentBar.low),
+          high: Math.max(bar.h * multiplier, currentBar.high)
+        }
+      }
+    })
+    if (currentBar) bars.push(currentBar)
+    return bars
+  } else {
+    // Regular data fetching
+    const host = useLaunchpadStore.getState().historyHost
+    const frame = ResolutionToSeconds[resolution as keyof typeof ResolutionToSeconds] ? `${resolution}m` : '5m'
+
+    const { data } = await axiosInstance.get(
+      `${host}/kline?poolId=${poolId}&interval=${frame}&limit=300`
+    )
+
+    const rows = data.rows || []
+    if (!rows.length) return []
+
+    const bars: LightweightBar[] = []
+    let currentBar: LightweightBar | undefined
+
+    rows.forEach((bar: any) => {
+      const barTime = Math.floor(bar.t / timeUnit) * timeUnit
+      if (currentBar && barTime * 1000 < currentBar.time) {
+        bars.push(currentBar)
+        currentBar = undefined
+      }
+
+      if (!currentBar) {
+        currentBar = {
+          time: barTime * 1000,
+          low: Math.min(bar.o, bar.l, bar.h, bar.c),
+          high: Math.max(bar.o, bar.l, bar.h, bar.c),
+          open: bar.o,
+          close: bar.c
+        }
+        return
+      }
+      currentBar = {
+        ...currentBar,
+        close: bar.c,
+        low: Math.min(bar.l, currentBar.low),
+        high: Math.max(bar.h, currentBar.high)
+      }
+    })
+    if (currentBar) bars.push(currentBar)
+    return bars
+  }
+}
 
 export default function TVChart({
   poolId,
@@ -60,11 +168,15 @@ export default function TVChart({
   const locale = i18n.language === 'zh-CN' ? 'zh' : i18n.language
 
   const updateChartConfig = useTradingViewStore((s) => (birdeye ? s.updateBirdeyeChartConfig : s.updateChartConfig))
-
   const savedTvChartConfig = useTradingViewStore((s) => (birdeye ? s.birdeyeChartConfig : s.chartConfig))
   const savedResolution = useMemo(() => getSavedResolution({ savedConfig: savedTvChartConfig }), [savedTvChartConfig])
 
   const isNeedRefreshData = needRefresh || (refreshChartMint && refreshChartMint === mintInfo?.mint)
+
+  // Chart refs
+  const chartContainerRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<{ chart?: IChartApi; candle?: ISeriesApi<'Candlestick'>; volume?: ISeriesApi<'Histogram'> }>({})
+  const lastBarRef = useRef<LightweightBar | null>(null)
 
   useEffect(() => {
     refreshChartSubject.asObservable().subscribe((mint: string) => {
@@ -79,11 +191,6 @@ export default function TVChart({
       try {
         const { data } = await axiosInstance.get(`${useLaunchpadStore.getState().historyHost}/kline?poolId=${poolId}&interval=1m&limit=1`)
         return data.rows.length > 0
-        // if (data.rows.length > 0) {
-        //   const poolData = await connection.getAccountInfo(ToPublicKey(poolId), { commitment: 'confirmed' })
-        //   return !!poolData
-        // }
-        // return false
       } catch {
         return false
       }
@@ -106,297 +213,165 @@ export default function TVChart({
   }, [birdeye, isNeedRefreshData, poolId, connection])
 
   useEffect(() => {
-    if (!connection || !poolId) return
+    if (!connection || !poolId || !chartContainerRef.current) return
 
-    const overrides = {
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone as Timezone,
-      'paneProperties.background': theme.layer0,
-      'paneProperties.horzGridProperties.color': theme.layer1,
-      'paneProperties.vertGridProperties.color': theme.layer1,
-      'paneProperties.crossHairProperties.style': 1,
-      'paneProperties.legendProperties.showBarChange': true,
-      'paneProperties.legendProperties.showVolume': false,
-      'paneProperties.legendProperties.showSeriesTitle': false,
-      'paneProperties.legendProperties.backgroundTransparency': 50,
-      'paneProperties.legendProperties.showStudyTitles': false,
-      'paneProperties.legendProperties.showStudyArguments': false,
-      'paneProperties.legendProperties.showSeriesOHLC': true,
-      'paneProperties.legendProperties.showPriceSource': true,
-      'paneProperties.backgroundType': 'solid' as const,
-      'paneProperties.topMargin': 10,
-      'paneProperties.bottomMargin': 10,
-
-      'mainSeriesProperties.style': 1,
-      'mainSeriesProperties.candleStyle.upColor': theme.positive,
-      'mainSeriesProperties.candleStyle.borderUpColor': theme.positive,
-      'mainSeriesProperties.candleStyle.wickUpColor': theme.positive,
-      'mainSeriesProperties.candleStyle.downColor': theme.negative,
-      'mainSeriesProperties.candleStyle.borderDownColor': theme.negative,
-      'mainSeriesProperties.candleStyle.wickDownColor': theme.negative,
-      'mainSeriesProperties.statusViewStyle.symbolTextSource': 'ticker',
-      'mainSeriesProperties.highLowAvgPrice.highLowPriceLabelsVisible': true,
-      'mainSeriesProperties.highLowAvgPrice.highLowPriceLinesVisible': true,
-      'mainSeriesProperties.highLowAvgPrice.averageClosePriceLabelVisible': true,
-
-      'scalesProperties.textColor': theme.textPrimary,
-      'scalesProperties.backgroundColor': theme.layer0,
-      'scalesProperties.lineColor': theme.layer1,
-      'scalesProperties.fontSize': 12,
-      'scalesProperties.showSeriesPrevCloseValue': false,
-      'scalesProperties.showSymbolLabels': false,
-      'scalesProperties.showStudyPlotLabels': false,
-      'scalesProperties.showFundamentalNameLabel': false,
-
-      'chartEventsSourceProperties.breaks.visible': false,
-
-      volumePaneSize: 'small'
-    } as Partial<ChartPropertiesOverrides>
-
-    const studies_overrides = {
-      'volume.volume.color.0': theme.negative,
-      'volume.volume.color.1': theme.positive,
-
-      'relative strength index.plot.color': theme.accent,
-      'relative strength index.plot.linewidth': 1.5
+    // Clean up previous chart
+    if (chartRef.current.chart) {
+      chartRef.current.chart.remove()
+      chartRef.current = {}
     }
 
-    const ChartDataFeed = birdeye ? DatafeedBirdeye : Datafeed
-    const resolutionSupported =
-      savedResolution && ChartDataFeed.configurationData.supported_resolutions.indexOf(savedResolution as ResolutionString) > -1
+    const chartTextColor = theme.textPrimary
+    const axisColor = theme.layer1
+    const volumeColor = colorMode === 'light' ? '#7191FF4d' : '#7081943e'
+    const upColor = theme.positive
+    const downColor = theme.negative
+    const crosshairColor = theme.textPrimary
 
-    const options: TradingTerminalWidgetOptions = {
-      // debug: true,
-      container: id,
-      library_path: '/charting_library/charting_library/',
-      custom_css_url: '/tradingview.css',
-      autosize: true,
-      disabled_features: [
-        'header_symbol_search',
-        'header_compare',
-        'symbol_search_hot_key',
-        'symbol_info',
-        'go_to_date',
-        'header_layouttoggle',
-        'trading_account_manager',
-        'hide_main_series_symbol_from_indicator_legend',
-        'display_market_status',
-        'volume_force_overlay',
-        'header_undo_redo'
-      ],
-      enabled_features: [
-        'side_toolbar_in_fullscreen_mode',
-        'remove_library_container_border',
-        'hide_last_na_study_output',
-        'dont_show_boolean_study_arguments',
-        'hide_left_toolbar_by_default',
-        'hide_right_toolbar'
-      ],
-
-      theme: THEME_NAMES[appTheme],
-      overrides,
-
-      studies_overrides,
-      loading_screen: {
-        backgroundColor: theme.layer0,
-        foregroundColor: theme.layer0
+    // Create chart
+    const chart = createChart(chartContainerRef.current, {
+      layout: {
+        textColor: chartTextColor,
+        background: { type: ColorType.Solid, color: theme.layer0 },
+        fontFamily: 'Space Grotesk'
       },
-      time_frames: [],
-      symbol: poolId, // Default symbol
-
-      datafeed: new ChartDataFeed({ connection, mintInfo, mintBInfo, curveType }),
-      interval: (resolutionSupported ? savedResolution : birdeye ? '15' : '5') as ResolutionString,
-      locale: locale as LanguageCode,
-      numeric_formatting: { decimal_sign: '.', grouping_separator: '.' },
-      saved_data: !isEmpty(savedTvChartConfig) ? savedTvChartConfig : undefined,
-      custom_formatters: {
-        priceFormatterFactory: (symbolInfo, minTick) => {
-          if (symbolInfo === null) return null
-          const decimals = (symbolInfo as SymbolInfo).decimals
-          return {
-            format: (price, signPositive) => {
-              return formatCurrency(price.toFixed(20), { maximumDecimalTrailingZeroes: 5, decimalPlaces: decimals })
-            }
-          }
-        }
-        // studyFormatterFactory: (format, symbol) => {
-        //   if (!symbol) return null
-        //   if (format.type === 'volume') {
-        //     const decimals = (symbol as any).decimals
-        //     return {
-        //       format: (val) => {
-        //         return formatCurrency((val! / 10 ** 6).toFixed(decimals), {
-        //           maximumDecimalTrailingZeroes: 5,
-        //           decimalPlaces: decimals
-        //         })
-        //       }
-        //     }
-        //   }
-        //   return null
-        // }
+      grid: {
+        vertLines: { color: axisColor },
+        horzLines: { color: axisColor }
       },
-      auto_save_delay: 1
-    }
-
-    const tvChartWidget = new Widget(options)
-
-    let lastInterval = 0
-    let lastEntityId: EntityId
-    let mCapButton: null | HTMLElement
-
-    // landed launchpad
-    if (birdeye && mintInfo) {
-      tvChartWidget.headerReady().then(function () {
-        mCapButton = tvChartWidget.createButton()
-        mCapButton.style.cursor = 'pointer'
-        mCapButton.innerHTML = "<span style='color:#2937e8'>Price</span>/<span>Mcap</span>"
-
-        mCapButton.addEventListener('click', function () {
-          const isMarketCap = tvChartWidget.activeChart().symbolExt()?.name.includes('marketcap')
-          tvChartWidget.setSymbol(`${poolId}${isMarketCap ? '' : '_marketcap'}`, tvChartWidget.activeChart().resolution(), () => {
-            // mCapButton!.innerHTML = `<span ${isMarketCap ? "style='color:#2937e8'" : ''}>Price</span> / <span ${
-            //   !isMarketCap ? "style='color:#2937e8'" : ''
-            // }>Mcap</span>`
-          })
-        })
-
-        tvChartWidget.activeChart().onSymbolChanged().unsubscribeAll(null)
-        tvChartWidget
-          .activeChart()
-          .onSymbolChanged()
-          .subscribe(null, () => {
-            const isMarketCap = tvChartWidget.activeChart().symbolExt()?.name.includes('marketcap')
-            mCapButton!.innerHTML = `<span ${isMarketCap ? '' : "style='color:#2937e8'"}>Price</span> / <span ${
-              !isMarketCap ? '' : "style='color:#2937e8'"
-            }>Mcap</span>`
-          })
-      })
-    }
-
-    tvChartWidget.onChartReady(() => {
-      const chartIns = tvChartWidget.activeChart()
-      chartIns.removeAllShapes() // clear all shapes
-      const priceScale = chartIns.getPanes()[0].getMainSourcePriceScale()
-      priceScale?.setAutoScale(true)
-      const volumeScale = chartIns.getPanes()[1]?.getRightPriceScales()[0]
-      volumeScale?.setAutoScale(true)
-
-      // let dataMin = Number.MAX_SAFE_INTEGER
-      // let dataMax = Number.MIN_SAFE_INTEGER
-
-      tvChartWidget.applyOverrides(overrides)
-      tvChartWidget.applyStudiesOverrides(studies_overrides)
-
-      tvChartWidget.subscribe('onAutoSaveNeeded', () =>
-        tvChartWidget.save((chartConfig: object) => {
-          updateChartConfig(chartConfig)
-        })
-      )
-      tvChartWidget.changeTheme(THEME_NAMES[appTheme]).then(() => {
-        const tvChartId = (tvChartWidget as any)._id
-
-        if (tvChartId) {
-          const frame = document.getElementById(tvChartId)
-
-          if (isIFrame(frame) && frame.contentWindow) {
-            const innerHtml = frame.contentWindow.document.documentElement
-            switch (appTheme) {
-              case AppTheme.Dark:
-                innerHtml.classList.remove('theme-light')
-                innerHtml.classList.add('theme-dark')
-                break
-              case AppTheme.Light:
-                innerHtml.classList.remove('theme-dark')
-                innerHtml.classList.add('theme-light')
-                break
-              default:
-                break
-            }
-          }
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: crosshairColor },
+        horzLine: { color: crosshairColor }
+      },
+      autoSize: true,
+      rightPriceScale: { borderColor: axisColor },
+      timeScale: {
+        borderColor: axisColor,
+        tickMarkFormatter: (time: number, tickMarkType: TickMarkType) => {
+          if (tickMarkType === 0)
+            return dayjs(time * 1000).utc().format('YYYY/M')
+          if (tickMarkType < 3)
+            return dayjs(time * 1000).utc().format('M/D')
+          return dayjs(time * 1000).utc().format('H:mm')
         }
-
-        tvChartWidget.applyOverrides(overrides)
-        tvChartWidget.applyStudiesOverrides(studies_overrides)
-
-        const volumeStudyId = chartIns.getAllStudies().find((x) => x.name === 'Volume')?.id
-        if (volumeStudyId) {
-          const volume = chartIns.getStudyById(volumeStudyId)
-          volume.applyOverrides({
-            'volume.color.0': studies_overrides['volume.volume.color.0'],
-            'volume.color.1': studies_overrides['volume.volume.color.1']
-          })
-        }
-      })
-
-      if (!birdeye) {
-        // if (priceScale) {
-        //   chartIns.exportData().then((r) => {
-        //     r.data.forEach((point) => {
-        //       const ohcl = point.slice(1)
-        //       dataMin = Math.min(dataMin, ...ohcl)
-        //       dataMax = Math.max(dataMax, ...ohcl)
-        //     })
-        //     const visibleRange = priceScale.getVisiblePriceRange()
-        //     if (visibleRange && (visibleRange.from >= dataMin || visibleRange.to <= dataMax)) {
-        //       priceScale?.setVisiblePriceRange({
-        //         from: dataMin * 0.9,
-        //         to: dataMax * 1.1
-        //       })
-        //     }
-        //   })
-        // }
-
-        setArrowListener((prev: Bar, next: Bar) => {
-          window.clearInterval(lastInterval)
-          lastEntityId && chartIns.removeEntity(lastEntityId)
-          chartIns.removeAllShapes()
-          if (prev.close === next.close) return
-
-          const isUp = !prev.close || next.close > prev.close
-
-          try {
-            const id = chartIns.createShape(
-              {
-                time: next.time * 1000000,
-                price: isUp ? next.low : next.close
-              },
-              { shape: isUp ? 'arrow_up' : 'arrow_down', overrides: { fontsize: 8, visible: true, arrowColor: 'yellow' } }
-            )!
-            try {
-              chartIns.bringToFront([id])
-            } catch {
-              console.info('bringToFront not works')
-            }
-            lastEntityId = id
-
-            let i = 0
-            lastInterval = window.setInterval(() => {
-              const s = chartIns.getShapeById(id)
-              i++
-              if (i > 5) {
-                clearInterval(lastInterval)
-                chartIns.removeEntity(id)
-                return
-              }
-              s.setProperties({ visible: !s.getProperties().visible })
-            }, 100)
-
-            // lastClose = d.close
-          } catch (e) {
-            console.log('reset')
-            chartIns.resetData()
-          }
-        })
       }
     })
 
-    return () => {
-      // if (onTickCbk) tvChartWidget.unsubscribe('onTick', onTickCbk)
-      setArrowListener(undefined)
-      tvChartWidget.remove()
+    // Add candlestick series
+    const candlestickSeries = (chart as any).addCandlestickSeries({
+      upColor,
+      downColor,
+      borderVisible: false,
+      wickUpColor: upColor,
+      wickDownColor: downColor,
+      priceLineVisible: true,
+      priceFormat: {
+        type: 'custom',
+        formatter: (val: number) => {
+          return val ? formatCurrency(val, { maximumDecimalTrailingZeroes: 5 }) : val
+        },
+        minMove: 10 / Math.pow(10, Number(mintInfo?.decimals) ?? 2)
+      }
+    })
 
-      clearInterval(lastInterval)
+    candlestickSeries.priceScale().applyOptions({
+      scaleMargins: {
+        top: 0.1,
+        bottom: 0.1
+      }
+    })
+
+    // Add volume series
+    const volumeSeries = (chart as any).addHistogramSeries({
+      color: volumeColor,
+      priceFormat: {
+        type: 'volume'
+      },
+      priceScaleId: '',
+      lastValueVisible: false,
+      priceLineVisible: false
+    })
+
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: {
+        top: 0.7,
+        bottom: 0
+      }
+    })
+
+    chart.timeScale().applyOptions({
+      timeVisible: true
+    })
+
+    // Store refs
+    chartRef.current.chart = chart
+    chartRef.current.candle = candlestickSeries
+    chartRef.current.volume = volumeSeries
+
+    // Load initial data
+    const loadData = async () => {
+      const resolution = savedResolution || (birdeye ? '15' : '5')
+      const now = Date.now()
+      const from = now - (24 * 60 * 60 * 1000) // 24 hours ago
+      const to = now
+
+      try {
+        const bars = await fetchChartData(poolId, resolution, from / 1000, to / 1000, birdeye || false, mintInfo, mintBInfo)
+        if (bars.length > 0) {
+          candlestickSeries.setData(bars)
+          volumeSeries.setData(bars.map(bar => ({ time: bar.time, value: bar.volume || 0 })))
+          lastBarRef.current = bars[bars.length - 1]
+        }
+      } catch (error) {
+        console.error('Failed to load chart data:', error)
+      }
     }
-  }, [poolId, birdeye, id, theme, connection, reloadChartTag, mintInfo?.mint, mintBInfo?.address, curveType])
+
+    loadData()
+
+    // Set up real-time data streaming for non-birdeye charts
+    if (!birdeye) {
+      setArrowListener((prev: any, next: any) => {
+        if (!chartRef.current.candle || !lastBarRef.current) return
+
+        const newBar: LightweightBar = {
+          time: next.time,
+          open: next.open,
+          high: next.high,
+          low: next.low,
+          close: next.close
+        }
+
+        chartRef.current.candle.update({
+          ...newBar,
+          time: newBar.time as any
+        })
+        lastBarRef.current = newBar
+      })
+    }
+
+    // Save chart configuration
+    const saveChartConfig = () => {
+      const config = {
+        resolution: savedResolution,
+        theme: appTheme,
+      }
+      updateChartConfig(config)
+    }
+
+    // Auto-save configuration
+    const autoSaveInterval = setInterval(saveChartConfig, 1000)
+
+    return () => {
+      clearInterval(autoSaveInterval)
+      setArrowListener(undefined)
+      if (chartRef.current.chart) {
+        chartRef.current.chart.remove()
+        chartRef.current = {}
+      }
+    }
+  }, [poolId, birdeye, theme, connection, reloadChartTag, mintInfo?.mint, mintBInfo?.address, curveType, savedResolution, appTheme, updateChartConfig])
 
   useEffect(() => {
     if (connection) {
@@ -404,5 +379,5 @@ export default function TVChart({
     }
   }, [connection])
 
-  return <Box height={height} id={id} />
+  return <Box height={height} id={id} ref={chartContainerRef} />
 }
